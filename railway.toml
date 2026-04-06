@@ -1,2 +1,208 @@
 [deploy]
 startCommand = "uv run python main.py"
+import logging
+from urllib.parse import quote
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler,
+    CallbackQueryHandler, MessageHandler,
+    ContextTypes, filters
+)
+
+# ====== بيانات البوت ======
+TOKEN = "8468175474:AAEk0F3dYEG4PXCKjLQJtnJiNoSgatCuSnY"
+WHATSAPP_NUMBER = "9647844306049"
+ADMIN_ID = 656150043
+
+logging.basicConfig(level=logging.INFO)
+
+# ================= التبرعات =================
+donations = {
+    "1": "كفالة يتيم",
+    "2": "مجمع ولاية الضامن",
+    "3": "فقراء والايتام",
+    "4": "شيعة ايران ولبنان"
+}
+
+# ================= العملات =================
+currencies = {
+    "العراق": "دينار عراقي",
+    "السعودية": "ريال سعودي",
+    "الإمارات": "درهم إماراتي",
+    "الكويت": "دينار كويتي",
+    "البحرين": "دينار بحريني",
+    "قطر": "ريال قطري",
+    "الأردن": "دينار أردني",
+    "مصر": "جنيه مصري",
+    "تركيا": "ليرة تركية",
+    "إيران": "ريال إيراني",
+    "لبنان": "ليرة لبنانية",
+    "الولايات المتحدة": "دولار",
+    "كندا": "دولار كندي",
+    "أستراليا": "دولار أسترالي",
+    "ألمانيا": "يورو",
+    "فرنسا": "يورو",
+    "إيطاليا": "يورو",
+    "إسبانيا": "يورو",
+    "بريطانيا": "جنيه إسترليني",
+    "سويسرا": "فرنك سويسري",
+    "الصين": "يوان",
+    "اليابان": "ين",
+    "الهند": "روبية",
+    "باكستان": "روبية",
+    "إندونيسيا": "روبية",
+    "ماليزيا": "رينغيت",
+    "سنغافورة": "دولار",
+    "تايلند": "بات",
+    "جنوب أفريقيا": "راند",
+    "روسيا": "روبل",
+    "البرازيل": "ريال برازيلي",
+    "المكسيك": "بيزو"
+}
+
+# ================= طرق الدفع =================
+payments = [
+    "زين كاش", "آسياسيل", "سوبر كي",
+    "ماستر كارد", "فيزا",
+    "بايبال", "تحويل بنكي",
+    "Apple Pay", "Google Pay",
+    "Western Union", "MoneyGram",
+    "كاش"
+]
+
+# ================= start =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """💠 تبرعات مؤسسة ولاية الضامن
+بإشراف سماحة الشيخ علاء المهدوي
+
+اختر نوع التبرع:
+
+⚙️ تم تطوير هذا البوت بواسطة @JJJOX"""
+
+    keyboard = [
+        [InlineKeyboardButton("👶 كفالة يتيم", callback_data="don_1")],
+        [InlineKeyboardButton("🏢 مجمع ولاية الضامن", callback_data="don_2")],
+        [InlineKeyboardButton("🤲 فقراء والايتام", callback_data="don_3")],
+        [InlineKeyboardButton("🌍 شيعة ايران ولبنان", callback_data="don_4")]
+    ]
+
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ================= اختيار التبرع =================
+async def choose_donation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data["donation"] = donations[query.data.split("_")[1]]
+
+    keyboard = []
+    for country in currencies:
+        keyboard.append([InlineKeyboardButton(country, callback_data=f"cur_{country}")])
+
+    await query.edit_message_text("🌍 اختر الدولة:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ================= اختيار الدولة =================
+async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    country = query.data.split("_",1)[1]
+    context.user_data["currency"] = currencies[country]
+
+    keyboard = [
+        [InlineKeyboardButton("25,000", callback_data="amt_25000")],
+        [InlineKeyboardButton("50,000", callback_data="amt_50000")],
+        [InlineKeyboardButton("100,000", callback_data="amt_100000")],
+        [InlineKeyboardButton("✍️ إدخال مبلغ", callback_data="custom_amount")]
+    ]
+
+    await query.edit_message_text(
+        f"💰 العملة: {currencies[country]}\nاختر المبلغ:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= إدخال مبلغ =================
+async def ask_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data["waiting_amount"] = True
+    await query.edit_message_text("✍️ ارسل المبلغ:")
+
+# ================= استقبال مبلغ =================
+async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("waiting_amount"):
+        return
+
+    context.user_data["amount"] = update.message.text
+    context.user_data["waiting_amount"] = False
+
+    await show_payment(update, context)
+
+# ================= اختيار مبلغ =================
+async def choose_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data["amount"] = query.data.split("_")[1]
+
+    await show_payment(query, context)
+
+# ================= عرض الدفع =================
+async def show_payment(update_obj, context):
+    donation = context.user_data["donation"]
+    amount = context.user_data["amount"]
+
+    try:
+        num = int(amount.replace(",", ""))
+    except:
+        num = 0
+
+    if donation == "كفالة يتيم" and num < 50000:
+        await update_obj.edit_message_text("❌ الحد الأدنى 50,000")
+        return
+
+    keyboard = [[InlineKeyboardButton(p, callback_data=f"pay_{p}")] for p in payments]
+
+    await update_obj.edit_message_text("💳 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ================= الدفع =================
+async def choose_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    payment = query.data.split("_",1)[1]
+    data = context.user_data
+
+    message = f"""السلام عليكم
+اريد تبرع {data['donation']}
+بمبلغ {data['amount']} {data['currency']}
+عن طريق {payment}
+يرجى ارسال طريقة الدفع"""
+
+    link = f"https://wa.me/{WHATSAPP_NUMBER}?text={quote(message)}"
+
+    # إشعار لك
+    await context.bot.send_message(ADMIN_ID, f"📥 متبرع جديد:\n{message}")
+
+    keyboard = [[InlineKeyboardButton("📲 واتساب", url=link)]]
+
+    await query.edit_message_text(
+        "اضغط للمتابعة:\n\n⚙️ @JJJOX",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= تشغيل البوت =================
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(choose_donation, pattern="don_"))
+app.add_handler(CallbackQueryHandler(choose_country, pattern="cur_"))
+app.add_handler(CallbackQueryHandler(choose_amount, pattern="amt_"))
+app.add_handler(CallbackQueryHandler(ask_amount, pattern="custom_amount"))
+app.add_handler(CallbackQueryHandler(choose_payment, pattern="pay_"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_amount))
+
+print("🔥 BOT STARTED")
+app.run_polling()
